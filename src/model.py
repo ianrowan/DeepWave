@@ -7,15 +7,15 @@ def default_hparams():
         n_cat=0,
         n_timestep=12,
         n_freq=512,
-        n_head=12,
-        n_layer=12,
+        n_head=16,
+        n_layer=16,
     )
 
 def shape_list(x):
     """Deal with dynamic shape in tensorflow cleanly."""
     static = x.shape.as_list()
     dynamic = tf.shape(x)
-    return [dynamic[i] if s is None else s for i, s in enumerate(static)]
+    return [dynamic[i].value if s is None else s for i, s in enumerate(static)]
 
 def softmax(x, axis=-1):
     x = x - tf.reduce_max(x, axis=axis, keepdims=True)
@@ -68,6 +68,7 @@ def attention_mask(nd, ns, *, dtype):
 
 def attn(x, scope, n_state, *, past, hparams):
     assert x.shape.ndims == 3  # Should be [batch, sequence, features]
+    print(n_state)
     assert n_state % hparams.n_head == 0
     if past is not None:
         assert past.shape.ndims == 5  # Should be [batch, 2, heads, sequence, features], where 2 is [k, v]
@@ -148,30 +149,33 @@ def model(hparams, X, scope='model', reuse=False):
     #print(hparams)
     with tf.variable_scope(scope, reuse=reuse):
         results = {}
-        batch, sequence = shape_list(X)
+        batch, sequence, emb = shape_list(X)
         print(batch)
         print(sequence)
-        wpe = tf.get_variable('wpe', [hparams.n_timestamp, hparams.n_freqs],
-                             initializer=tf.random_normal_initializer(stddev=0.01))
-        wte = tf.get_variable('wte', [hparams.n_cat, hparams.n_freqs],
+
+        wte = tf.get_variable('wte', [hparams.n_cat, sequence*hparams.n_freq],
                              initializer=tf.random_normal_initializer(stddev=0.02))
 
-        h = tf.gather(wte, X) + tf.gather(wpe, positions_for(X, 0))
-
+        h = X
         # Transformer
         presents = []
         pasts = [None] * hparams.n_layer
         assert len(pasts) == hparams.n_layer
         for layer, past in enumerate(pasts):
+            print(h)
+            print(layer)
             h, present = block(h, 'h%d' % layer, past=past, hparams=hparams)
             if layer == 10:
                 tf.add_to_collection('checkpoints', h)
             presents.append(present)
         results['present'] = tf.stack(presents, axis=1)
         h = norm(h, 'ln_f')
-
-        # Language model loss.  Do tokens <n predict token n?
-        h_flat = tf.reshape(h, [batch, sequence*hparams.n_embd])
-        logits = tf.matmul(h_flat, wte, transpose_b=True)
+        w = tf.get_variable('w1', [sequence*hparams.n_freq, sequence*hparams.n_freq],
+                            initializer=tf.random_normal_initializer(stddev=0.02))
+        b = tf.get_variable('b1', [sequence*hparams.n_freq], initializer=tf.constant_initializer(0))
+        b2 = tf.get_variable('b2', [hparams.n_cat], initializer=tf.constant_initializer(0))
+        h_flat = tf.reshape(h, [batch, sequence*hparams.n_freq])
+        l1 = tf.matmul(h_flat, w) + b
+        logits = tf.matmul(l1, wte, transpose_b=True) + b2
         results['logits'] = logits
         return results
