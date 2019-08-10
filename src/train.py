@@ -140,7 +140,7 @@ def train(sess,
                 sample = next_batch(batch_size, data, labels)
                 out = sess.run(logits, feed_dict={inp_specs: sample[0]})
                 acc = sum(np.argmax(np.asarray(out['logits']), axis=1) == np.argmax(sample[1], axis=1))/batch_size
-                print("[Summary Step] Accuracy {}% for {} distribution".format(str(acc * 100), str(np.sum(sample[1],0))))
+                print("[Summary Step] Accuracy {}% for {} distribution".format(str(acc * 100), str(np.sum(sample[1], 0))))
             counter += 1
 
 

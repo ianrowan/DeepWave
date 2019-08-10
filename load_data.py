@@ -17,7 +17,7 @@ def load_dataset(file, dtype,
     :param train_split: % of data for training
     :param spectrogram: Use Specrtogram data?
     :param one_hot: onehot encode data?
-    :param save_data: save as npy type object
+    :param save_data: file name to save npy
     :return: x:[example x sequence x frequency], labels: one-hot or integer like labels
     '''
     if dtype == 'pkl':
@@ -51,8 +51,8 @@ def load_dataset(file, dtype,
     print("Loaded {} Labels with {} Categories".format(str(len(labels)), str(len(set(labels)))))
     labels = labels if not one_hot else LabelBinarizer().fit_transform(labels)
     if save_data:
-        np.save('data/radio_in', x)
-        np.save('data/radio_lab', labels)
+        np.save('data/{}_in'.format(save_data), x)
+        np.save('data/{}_lab'.format(save_data), labels)
 
     return np.asarray(x), np.asarray(labels, dtype=np.int8)
 
