@@ -175,7 +175,9 @@ def model(hparams, X, scope='model', reuse=False):
         b = tf.get_variable('b1', [sequence*hparams.n_freq], initializer=tf.constant_initializer(0))
         b2 = tf.get_variable('b2', [hparams.n_cat], initializer=tf.constant_initializer(0))
         h_flat = tf.reshape(h, [batch, sequence*hparams.n_freq])
+        keep = tf.placeholder(tf.float32, name="drop")
         l1 = tf.matmul(h_flat, w) + b
+        l1 = tf.nn.dropout(l1, keep_prob=keep)
         logits = tf.matmul(l1, wte, transpose_b=True) + b2
         results['logits'] = logits
         return results

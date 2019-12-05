@@ -41,7 +41,7 @@ def load_dataset(file, dtype,
         x = np.vstack(x)
 
     else:
-        data = np.loadtxt('data/{}'.format(file), delimiter=',')[-51000:]
+        data = np.loadtxt('data/{}'.format(file), delimiter=',')[-65000:]
         x = list(map(get_spectrogram, data[:, :-1]))
         labels = data[:, -1]
         print(set(list(labels)))

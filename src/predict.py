@@ -4,10 +4,10 @@ import numpy as np
 import src.model as model
 import time
 import json
-from sklearn import metrics
+from sklearn import metrics, preprocessing
 import matplotlib.pyplot as plt
 import itertools
-
+from tqdm import tqdm
 def predict(sess,
             data,
             run_name,
@@ -37,50 +37,75 @@ def predict(sess,
     # Get Model vars
     all_vars = [v for v in tf.trainable_variables() if 'model' in v.name]
     saver = tf.train.Saver(var_list=all_vars)
-    sess.run(tf.global_variables_initializer)
+    sess.run(tf.global_variables_initializer())
     ckpt= tf.train.latest_checkpoint(model_path)
     saver.restore(sess, ckpt)
 
     predictions = np.zeros((len(data), num_categories))
-    num_batches = np.ceil(len(data)/batch_size)
+    num_batches = int(np.ceil(len(data)/batch_size))
 
-    for i in range(num_batches):
+    for i in tqdm(range(num_batches)):
         c = batch_size
 
         if i * batch_size + c > len(data):
             add = (i * batch_size + c) - len(data)
             pred = sess.run(prediction,
-                            feed_dict={inp_specs: np.concatenate((data[i*batch_size:], np.zeros((add, hparams.n_timestep, hparams.n_freq))))})
+                            feed_dict={inp_specs: np.concatenate((data[i*batch_size:], np.zeros((add, hparams.n_timestep, hparams.n_freq)))),
+                                       "model/drop:0": 1.0})['logits']
             predictions[i*batch_size:] = pred[:-add]
         else:
+
             predictions[i*batch_size: i*batch_size+c] =\
-                sess.run(prediction, feed_dict={inp_specs: data[i*batch_size: i*batch_size+batch_size]})
+                sess.run(prediction, feed_dict={inp_specs: data[i*batch_size: i*batch_size+batch_size],
+                                                "model/drop:0": 1.0})['logits']
 
     cats = np.argmax(predictions, axis=1)
 
     return {"raw": predictions,
             "category": cats,
-            "predictName": category_names[cats] if category_names else None,
+            "predictName": ["N", "S", "V", "F", "Q"],
             "names": category_names}
 
 
 def prediction_accuracy(predictions, labels, show_matrix=False):
     # Calculate accuracy -> sum(pred == labels)/total
     label_cats = np.argmax(labels, axis=1)
-    accuracy = sum(predictions["category"] == label_cats)/len(predictions)
+
+    accuracy = sum(predictions["category"] == label_cats)/len(labels)
+    print(accuracy)
     print("*********************************\n"
           "                         {}\n"
           "Prediction distribution: {}\n"
-          "Actual Distribution:     {}".format(str(set(list(predictions["PredictName"]))),
-                                               str(np.sum(predictions["raw"], 0)),
+          "Actual Distribution:     {}".format(str(set(list(predictions["predictName"]))),
+                                               str(np.sum(preprocessing.LabelBinarizer().fit_transform(predictions["category"]), 0)),
                                                str(np.sum(labels, 0))))
     print("Model accuracy: {}%".format(str(accuracy * 100)))
     print("=================================")
     if show_matrix:
         _get_confusion_matrix(y_pred=predictions["category"], y_true=label_cats,
+                              title="MIT-BIH Test Result Matrix",
                               target_names=predictions["names"])
+        show_final_hist(predictions["category"], label_cats,  labels,
+                        predictions['names'])
 
     return accuracy
+
+def show_final_hist(pred, true, labels, names):
+    x = np.asarray([pred, true]).transpose()
+    print(x)
+    print(set(list(x[:, 0])))
+    plt.hist(x, bins=range(6), histtype='bar', label=["Predicted", "Actual"], rwidth=0.8)
+    plt.xticks([i for i in range(6)], names)
+    plt.legend(loc="upper right")
+    plt.title('Predicted vs Actual Labels')
+    plt.xlabel('Category\n'
+               "                         {}\n"
+               "Prediction distribution: {}\n"
+               "Actual Distribution:     {}".format(str(names),
+                                                    str(np.sum(preprocessing.LabelBinarizer().fit_transform(
+                                                       pred), 0)),
+                                                    str(np.sum(labels, 0))))
+    plt.show()
 
 
 def _get_confusion_matrix(y_pred, y_true,
@@ -89,13 +114,22 @@ def _get_confusion_matrix(y_pred, y_true,
                           cmap=None,
                           normalize=True):
     cm = metrics.confusion_matrix(y_true, y_pred)
+    FP = cm.sum(axis=0) - np.diag(cm)
+    FN = cm.sum(axis=1) - np.diag(cm)
+    TP = np.diag(cm)
+    TN = cm.sum() - (FP + FN +TP)
+    sen = TP/(TP+FN)
+    spe = TN/(TP+FP)
 
+    print("SEN: {}\nSPE: {}".format(str(sen), str(spe)))
     accuracy = np.trace(cm) / float(np.sum(cm))
     misclass = 1 - accuracy
 
     if cmap is None:
         cmap = plt.get_cmap('Blues')
 
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     plt.figure(figsize=(8, 6))
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
     plt.title(title)
@@ -106,9 +140,6 @@ def _get_confusion_matrix(y_pred, y_true,
     tick_marks = np.arange(len(target_names))
     plt.xticks(tick_marks, target_names, rotation=45)
     plt.yticks(tick_marks, target_names)
-
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
     thresh = cm.max() / 1.5 if normalize else cm.max() / 2
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):

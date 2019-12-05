@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 import src.model as model
 import time
-
+import json
 
 def start_tf_sess():
     """
@@ -26,6 +26,7 @@ def train(sess,
           print_each=1,
           save_every=1000,
           accumulate=5,
+          use_class_entropy=False,
           model_path="checkpoint/"):
 
     model_path = os.path.join(model_path, run_name)
@@ -39,6 +40,9 @@ def train(sess,
     #Set HyperParams
     if n_layers: hparams.n_layer = n_layers
     if n_heads: hparams.n_head = n_heads
+    if os.path.exists(model_path+"/hparams.json"):
+        with open(os.path.join(model_path, 'hparams.json')) as f:
+            hparams.override_from_dict(json.load(f))
 
     #Spectrogram dimensions
     d_shape = np.shape(data)
@@ -57,14 +61,15 @@ def train(sess,
     all_vars = [v for v in tf.trainable_variables() if 'model' in v.name]
     print("Using {} Parameter Network".format(str(len(all_vars))))
 
+    lr = tf.placeholder(tf.float32)
     if accumulate > 1:
         #Train step using AdamOtimizer with Accumulating gradients
-        opt = AccumulatingOptimizer(opt=tf.train.AdamOptimizer(learning_rate=learning_rate), var_list=all_vars)
+        opt = AccumulatingOptimizer(opt=tf.train.AdamOptimizer(learning_rate=lr), var_list=all_vars)
         opt_reset = opt.reset()
         opt_compute = opt.compute_gradients(loss)
         opt_apply = opt.apply_gradients()
     else:
-        opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        opt = tf.train.AdamOptimizer(learning_rate=lr)
         opt_grads = tf.gradients(loss, all_vars)
         opt_grads = list(zip(opt_grads, all_vars))
         opt_apply = opt.apply_gradients(opt_grads)
@@ -113,6 +118,12 @@ def train(sess,
     avg_loss = (0.0, 0.0)
     start_time = time.time()
 
+    def class_entropy(y):
+        y = np.sum(y, 0)
+        e = sum([(i/sum(y)) * np.log(i/sum(y)) if i > 0 else 0 for i in y])
+
+        return np.abs(1-(-np.log(1/len(y)) + e))
+
     try:
         while counter < (counter_base+ steps):
             if (counter - 1) % save_every == 0 and counter > 1:
@@ -120,29 +131,36 @@ def train(sess,
 
             # Get batch of specified size
             x, lab = next_batch(batch_size, data, labels)
+            lrate = learning_rate * class_entropy(lab) if use_class_entropy else learning_rate
+
             if accumulate > 1:
                 sess.run(opt_reset)
                 #Run Gradient accumulation steps
                 for _ in range(accumulate):
                     sess.run(opt_compute, feed_dict={inp_specs: x, label_exp: lab})
             else:
-                _, v_loss = sess.run((opt_apply, loss), feed_dict={inp_specs: x, label_exp: lab})
+                _, v_loss = sess.run((opt_apply, loss), feed_dict={inp_specs: x,
+                                                                   label_exp: lab,
+                                                                   lr: lrate,
+                                                                   "model/drop:0": 1.0})
 
             avg_loss = (avg_loss[0] * 0.99 + v_loss, avg_loss[1] * 0.99 + 1.0)
             print(
-                '[{counter} | {time:2.2f}] loss={loss:2.2f} avg={avg:2.2f}'
+                '[{counter} | {time:2.2f}] loss={loss:2.2f} avg={avg:2.2f} lrate={lrate}'
                     .format(
                     counter=counter,
                     time=time.time() - start_time,
                     loss=v_loss,
-                    avg=avg_loss[0] / avg_loss[1]))
+                    avg=avg_loss[0] / avg_loss[1],
+                    lrate=str(lrate)))
             if counter % print_each == 0:
                 sample = next_batch(batch_size, data, labels)
-                out = sess.run(logits, feed_dict={inp_specs: sample[0]})
+                out = sess.run(logits, feed_dict={inp_specs: sample[0], "model/drop:0": 1.0})
                 acc = sum(np.argmax(np.asarray(out['logits']), axis=1) == np.argmax(sample[1], axis=1))/batch_size
                 print("[Summary Step] Accuracy {}% for {} distribution".format(str(acc * 100), str(np.sum(sample[1], 0))))
+                print("Class Entropy: {}".format(str(class_entropy(sample[1]))))
             counter += 1
-
+        save()
 
     except KeyboardInterrupt:
         print('interrupted')
